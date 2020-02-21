@@ -1,19 +1,23 @@
-#!/usr/bin/env python
+#!/usr/bin/env python2
 
 # Copyright (c) 2007, 2008 Rocco Rutte <pdmef@gmx.net> and others.
 # License: MIT <http://www.opensource.org/licenses/mit-license.php>
 
-from mercurial import repo,hg,cmdutil,util,ui,revlog,node
+from mercurial import hg,util,ui,templatefilters
+from mercurial import error as hgerror
+from mercurial.scmutil import revsymbol,binnode
+
 import re
 import os
 import sys
+import subprocess
 
 # default git branch name
 cfg_master='master'
 # default origin name
 origin_name=''
 # silly regex to see if user field has email address
-user_re=re.compile('([^<]+) (<[^>]+>)$')
+user_re=re.compile('([^<]+) (<[^>]*>)$')
 # silly regex to clean out user names
 user_clean_re=re.compile('^["]([^"]+)["]$')
 
@@ -31,7 +35,9 @@ def setup_repo(url):
   except TypeError:
     myui=ui.ui()
     myui.setconfig('ui', 'interactive', 'off')
-  return myui,hg.repository(myui,url)
+    # Avoids a warning when the repository has obsolete markers
+    myui.setconfig('experimental', 'evolution.createmarkers', True)
+  return myui,hg.repository(myui,url).unfiltered()
 
 def fixup_user(user,authors):
   user=user.strip("\"")
@@ -41,14 +47,13 @@ def fixup_user(user,authors):
     user=authors.get(user,user)
   name,mail,m='','',user_re.match(user)
   if m==None:
-    # if we don't have 'Name <mail>' syntax, use 'user
-    # <devnull@localhost>' if use contains no at and
-    # 'user <user>' otherwise
-    name=user
-    if '@' not in user:
-      mail='<devnull@localhost>'
-    else:
-      mail='<%s>' % user
+    # if we don't have 'Name <mail>' syntax, extract name
+    # and mail from hg helpers. this seems to work pretty well.
+    # if email doesn't contain @, replace it with devnull@localhost
+    name=templatefilters.person(user)
+    mail='<%s>' % templatefilters.email(user)
+    if '@' not in mail:
+      mail = '<devnull@localhost>'
   else:
     # if we have 'Name <mail>' syntax, everything is fine :)
     name,mail=m.group(1),m.group(2)
@@ -68,9 +73,20 @@ def get_branch(name):
     return origin_name + '/' + name
   return name
 
-def get_changeset(ui,repo,revision,authors={}):
-  node=repo.lookup(revision)
+def get_changeset(ui,repo,revision,authors={},encoding=''):
+  # Starting with Mercurial 4.6 lookup no longer accepts raw hashes
+  # for lookups. Work around it by changing our behaviour depending on
+  # how it fails
+  try:
+    node=repo.lookup(revision)
+  except hgerror.ProgrammingError:
+    node=binnode(revsymbol(repo,str(revision))) # We were given a numeric rev
+  except hgerror.RepoLookupError:
+    node=revision # We got a raw hash
   (manifest,user,(time,timezone),files,desc,extra)=repo.changelog.read(node)
+  if encoding:
+    user=user.decode(encoding).encode('utf8')
+    desc=desc.decode(encoding).encode('utf8')
   tz="%+03d%02d" % (-timezone / 3600, ((-timezone % 3600) / 60))
   branch=get_branch(extra.get('branch','master'))
   return (node,manifest,fixup_user(user,authors),(time,tz),files,desc,branch,extra)
@@ -103,12 +119,10 @@ def save_cache(filename,cache):
 def get_git_sha1(name,type='heads'):
   try:
     # use git-rev-parse to support packed refs
-    cmd="GIT_DIR='%s' git rev-parse --verify refs/%s/%s 2>/dev/null" % (os.getenv('GIT_DIR','/dev/null'),type,name)
-    p=os.popen(cmd)
-    l=p.readline()
-    p.close()
+    ref="refs/%s/%s" % (type,name)
+    l=subprocess.check_output(["git", "rev-parse", "--verify", "--quiet", ref])
     if l == None or len(l) == 0:
       return None
     return l[0:40]
-  except IOError:
+  except subprocess.CalledProcessError:
     return None
