@@ -1,59 +1,102 @@
-#!/usr/bin/env python
-import bitbucket
 import os
-from getpass import getpass
-import logging
-import logging.config
 import time
+from getpass import getpass
+from urllib import urlencode
+from urllib2 import Request, urlopen
+from pybitbucket.auth import BasicAuthenticator
+from pybitbucket.bitbucket import Client
+from pybitbucket.repository import Repository, RepositoryPayload, RepositoryRole, RepositoryType, RepositoryForkPolicy
 
-logging.config.fileConfig('logging.conf')
-log = logging.getLogger('bitbucket-hg-to-git')
+# use app password when 2 factor authentication is enabled.
+# see: https://developer.atlassian.com/bitbucket/api/2/reference/meta/authentication#app-pw
+username = ''
+password = ''
+teamname = ''
+hgprefix = '(Mercurial)'
 
-def main():
-    username = raw_input('Enter your bitbucket username: ')
-    password = getpass(prompt='Enter your bitbucket password: ')
-    bb = bitbucket.BitBucket(username, password)
-    print bb
-    try:
-        user = bb.user(username)
-    except TypeError:
-        print('Looks like you probably typed in the wrong username.')
-    repos = user.repositories()
-    if not repos:
-        print('No repos found. Perhaps you typed in the wrong password.')
-        exit(0)
-    for repo_data in repos:
-        if repo_data.get('scm') != 'hg':
-            continue
-        if repo_data.get('slug').startswith('zzz'):
-            continue
-        print 'cloning repo %s...' % repo_data.get('name')
-        hg_clone_dir = 'hg-repos/%s' % repo_data.get('slug')
-        git_clone_dir = 'git-repos/%s' % repo_data.get('slug')
-        os.popen('rm -rf %s' % hg_clone_dir)
-        hg_clone_command = "hg clone ssh://hg@bitbucket.org/%s/%s %s" % (username, repo_data.get('slug'), hg_clone_dir)
-        os.popen(hg_clone_command)
-        print 'creating local git repo...'
-        os.popen('rm -rf %s' % git_clone_dir)
-        os.popen('mkdir -p %s' % git_clone_dir)
-        os.popen('git init %s' % git_clone_dir)
-        
-        print 'converting hg repo...'
-        covert_command = 'cd %s;../../fast-export/hg-fast-export.sh -r ../../%s --force' % (git_clone_dir, hg_clone_dir)
-        os.popen(covert_command)
-        os.popen('cd %s; git checkout HEAD' % git_clone_dir)
-        print 'renaming hg repository...'
-        repo = bb.repository(username, repo_data.get('slug'))
-        repo.save(dict(name='zzz%s HG' % repo_data.get('name')))
-        
-        print 'creating new remote repository...'
-        bb.create_repo(dict(name=repo_data.get('name'),scm='git',is_private=repo_data.get('is_private'),description=repo_data.get('description')))
-        print 'give bitbucket some time to create repo (20 seconds)...'
-        time.sleep(20)
+if not username:
+  username = raw_input('Enter your bitbucket username: ')
+  if not teamname:
+    teamname = raw_input('Enter your bitbucket teamname (leave empty if you don\'t need it): ')
+if not teamname: 
+  teamname = username
+if not password:
+  password = getpass(prompt='Enter your bitbucket password: ')
+if not username or not teamname or not password:
+  print('Username and password must be provided.')
+  exit(0)
 
-        print 'pushing to new git repository...'
-        os.popen('cd %s;git remote add origin git@bitbucket.org:%s/%s.git' % (git_clone_dir,username,repo_data.get('slug')))
-        os.popen('cd %s;git push origin master' % (git_clone_dir,))
-    
-if __name__ == "__main__":
-    main()
+bitbucket = Client(
+    BasicAuthenticator(
+        username,
+        password,
+        ''
+    )
+)
+
+for repo in Repository.find_repositories_by_owner_and_role(owner=teamname, role=RepositoryRole.MEMBER.value, client=bitbucket):
+  if repo.scm != RepositoryType.HG.value:
+    continue
+  if repo.name.startswith(hgprefix):
+    continue
+
+  hg_clone_https = ''
+  for clone in repo.links['clone']:
+    if clone['name'] == 'https':
+      hg_clone_https = clone['href']
+      break
+  hg_clone_https = hg_clone_https.replace('@', ':%s@' % password)
+
+  print('\n\n================================================================================================')
+  print('Cloning remote hg repo: %s' % repo.name)
+  hg_clone_dir = 'hg-repos/%s' % repo.slug
+  os.popen('rm -rf %s' % hg_clone_dir)
+  hg_clone_command = "hg clone %s %s" % (hg_clone_https, hg_clone_dir)
+  os.popen(hg_clone_command)
+
+  print('Creating local git repo...')
+  git_clone_dir = 'git-repos/%s' % repo.slug
+  os.popen('rm -rf %s' % git_clone_dir)
+  os.popen('mkdir -p %s' % git_clone_dir)
+  os.popen('git init %s' % git_clone_dir)
+  
+  print('Migrating local hg repo to git...')
+  convert_command = 'cd %s;../../fast-export/hg-fast-export.sh -r ../../%s --force' % (git_clone_dir, hg_clone_dir)
+  os.popen(convert_command)
+  os.popen('cd %s; git checkout HEAD' % git_clone_dir)
+
+  print('Renaming remote hg repo...')
+  url = repo.links['self']['href']
+  auth = '%s:%s' % (username, password)
+  auth = {'Authorization': 'Basic %s' % (auth.encode('base64').strip())}
+  request = Request(url, urlencode(dict(name='%s %s' % (hgprefix, repo.name))), auth)
+  request.get_method = lambda: 'PUT'
+  try:
+    result = urlopen(request).read()
+  except Exception as e:
+    print(repr(e))
+    break
+
+  print('Creating remote git repo...')
+  payload = RepositoryPayload() \
+    .add_scm(RepositoryType.GIT) \
+    .add_name(str(repo.name)) \
+    .add_is_private(repo.is_private) \
+    .add_description(str(repo.description)) \
+    .add_fork_policy(RepositoryForkPolicy.ALLOW_FORKS) \
+    .add_language(str(repo.language)) \
+    .add_has_issues(repo.has_issues) \
+    .add_has_wiki(repo.has_wiki)
+  repo = Repository.create(payload, repository_name=repo.slug, owner=teamname, client=bitbucket)
+
+  git_clone_https = ''
+  for clone in repo.links['clone']:
+    if clone['name'] == 'https':
+      git_clone_https = clone['href']
+      break
+  git_clone_https = git_clone_https.replace('@', ':%s@' % password)
+  time.sleep(2)
+
+  print('Pushing to remote git repo...')
+  os.popen('cd %s;git remote add origin %s' % (git_clone_dir, git_clone_https))
+  os.popen('cd %s;git push origin master' % (git_clone_dir))
