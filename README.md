@@ -7,16 +7,16 @@ This little python script may help, it will clone all of your Bitbucket Mercuria
 WARNING
 -------
 
-Be sure to leave sufficient space on your disk, as this script will clone and duplicate all of your Mercurial repositories. Also, if you've enabled 2 factor authentication in your Bitbucket account, you may want to create an [App Password](https://developer.atlassian.com/bitbucket/api/2/reference/meta/authentication#app-pw) to authenticate with this script.
+Be sure to leave sufficient space on your disk, as this script will clone and duplicate all of your Mercurial repositories. Also, if you've enabled 2 factor authentication in your Bitbucket account, you may want to create an [App Password](https://developer.atlassian.com/bitbucket/api/2/reference/meta/authentication#app-pw) to authenticate with this script (Repositories Read/Write/Admin are required).
 
 This app is not destructive, it does not delete any Mercurial repositories, it renames them:
 
-1. Downloads the Mercurial repository
-2. Creates a local Git repository
-3. Converts the Mercurial repository into the newly created local Git repository
-4. Renames the old Mercurial repository to "(Mercurial) {repo name}"
-5. Creates a new remote Git repository with the original name
-6. Pushes the local Git repository to remote
+1. Downloads the Mercurial repository;
+2. Creates a local Git repository;
+3. Converts the Mercurial repository into the newly created local Git repository;
+4. Renames the old Mercurial repository to `(Mercurial) {repo name}`;
+5. Creates a new remote Git repository with the original name;
+6. Pushes the local Git repository to remote.
 
 Usage
 =====
@@ -24,11 +24,11 @@ Usage
 
 Requirements
 ============
-* This was only tested on macOS.  At the very least you will need an \*nix system to execute the popen calls
-* Python 2.x and dependencies (`pip install mercurial pybitbucket`)
-* `git` and `hg` command line tools
+* This was only tested on macOS. At the very least you will need a Unix-like system to execute the `popen` calls.
+* Python 2.x and dependencies (`pip install mercurial pybitbucket`).
+* `git` and `hg` command line tools.
 
-The dependencies  packaged with this script:
+The dependency packaged with this script:
 
 * fast-export https://github.com/frej/fast-export
 
