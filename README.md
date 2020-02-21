@@ -36,7 +36,7 @@ What am I left with?
 ====================
 * Once the script has been run you should have your old Mercurial repository renamed as `(Mercurial) {repo name}`.
 * A new Git repository with the name of the original repository.
-* Not everything will be converted to your new Git repository. You will loose Issues, Downloads, Wiki pages, Followers etc.
+* Not everything will be converted to your new Git repository. You will lose Issues, Downloads, Wiki etc.
 
 In case of failure
 ==================
